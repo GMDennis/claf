@@ -9,7 +9,7 @@
          }
      },
      "iterator": {
-         "batch_size": 32
+         "batch_size": 16
      },
      "token": {
          "names": ["char", "fasttext"],
@@ -44,7 +44,7 @@
          "fasttext": {
              "embedding": {
                  "embed_dim": 300,
-                 "pretrained_path": "<fasttext.wiki.ko.300d.txt path>",
+                 "pretrained_path": "./fasttext.wiki.ko.300d.txt",
                  "trainable": false,
                  "dropout": 0.2
              }
