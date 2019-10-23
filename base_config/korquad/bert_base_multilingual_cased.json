@@ -10,8 +10,8 @@
              "max_question_length": 64
          }
      },
-     "iterator": {
-         "batch_size": 12
+    "iterator": {
+         "batch_size": 8
      },
      "token": {
          "names": ["feature"],
