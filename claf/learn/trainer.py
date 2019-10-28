@@ -7,6 +7,7 @@ import time
 import random
 
 import torch
+import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 
@@ -110,6 +111,61 @@ class Trainer:
         self.save_checkpoint = save_checkpoint
         self.log_dir = log_dir
 
+        self.num_layers = 0
+
+        self._count_layers()
+        self.weight_masks = [None for _ in range(self.num_layers)]
+        self.bias_masks = [None for _ in range(self.num_layers)]
+
+    def _count_layers(self):
+        for m in self.model.modules():
+            if isinstance(m, nn.Linear):
+                self.num_layers += 1
+
+        print(self.num_layers)
+
+
+    def _prune(self):
+        index = 0
+        num_pruned, num_weights = 0, 0
+        for m in self.model.modules():
+            if isinstance(m, nn.Linear):
+                num = torch.numel(m.weight.data)
+
+                if index == self.num_layers - 1:
+                    alpha = 0.25
+                else:
+                    alpha = 1
+
+            weight_mask = torch.ge(m.weight.data.abs(), alpha * m.weight.data.std()).type('torch.FloatTensor')
+            if self.cuda:
+                weight_mask = weight_mask.cuda()
+            self.weight_masks[index] = weight_mask
+
+            bias_mask = torch.ones(m.bias.data.size())
+            if self.cuda:
+                bias_mask = bias_mask.cuda()
+
+            for i in range(bias_mask.size(0)):
+                if len(torch.nonzero(weight_mask[i]).size()) == 0:
+                    bias_mask[i] = 0
+            self.bias_masks[index] = bias_mask
+
+            index +=1
+
+            layer_pruned = num - torch.nonzero(weight_mask).size(0)
+            print('number pruned in weight of layer %d: %.3f %%' % (index, 100 * (layer_pruned / num)))
+            bias_num = torch.numel(bias_mask)
+            bias_pruned = bias_num - torch.nonzero(bias_mask).size(0)
+            print('number pruned in bias of layer %d: %.3f %%' % (index, 100 * (bias_pruned / bias_num)))
+            num_pruned += layer_pruned
+            num_weights += num
+            
+            m.weight.data *= weight_mask
+            m.bias.data *= bias_mask
+
+        return num_pruned / num_weights
+
     def set_model_base_properties(self, config, log_dir):
         model = self.model
         if self.use_multi_gpu:
@@ -157,6 +213,8 @@ class Trainer:
         start_time = time.time()
 
         for epoch in range(1, self.num_epochs + 1):
+
+            self._prune()
             self.train_counter.epoch = epoch
 
             metrics = self._run_epoch(
@@ -178,6 +236,7 @@ class Trainer:
         eval_metrics = self._run_epoch(data_loader, is_training=False, disable_prograss_bar=False)
 
         self._report_metrics(tensorboard=False, valid_metrics=eval_metrics)
+        #torch.save(self.metric_logs, self.log_dir + "/tmp_for_filtering.pt")
 
     def evaluate_inference_latency(self, raw_examples, raw_to_tensor_fn, token_key=None, max_latency=1000):
         """
