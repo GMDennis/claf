@@ -6,6 +6,7 @@ import os
 import time
 import random
 
+import math
 import torch
 import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
@@ -111,60 +112,123 @@ class Trainer:
         self.save_checkpoint = save_checkpoint
         self.log_dir = log_dir
 
-        self.num_layers = 0
-
+        self.num_dense_layers = 0
+        self.num_attention_layers = 0
+        self.num_dropout_layers = 0
+        self.dropout_rates = {}
         self._count_layers()
-        self.weight_masks = [None for _ in range(self.num_layers)]
-        self.bias_masks = [None for _ in range(self.num_layers)]
+        self.dense_weight_masks = [None for _ in range(self.num_dense_layers)]
+        self.dense_bias_masks = [None for _ in range(self.num_dense_layers)]
+        self.attention_weight_masks = [None for _ in range(self.num_attention_layers)]
+        self.attention_bias_masks = [None for _ in range(self.num_attention_layers)]
+
+        self.env = "gpu" if torch.cuda.is_available() else "cpu"
 
     def _count_layers(self):
-        for m in self.model.modules():
-            if isinstance(m, nn.Linear):
-                self.num_layers += 1
+        for name, m in self.model.named_modules():
+            logger.info(name)
 
-        print(self.num_layers)
+            #exception for last layer
+            if "bert.pooler.dense" in name:
+                continue
+
+            if "dense" in name or "value" in name:
+                logger.info('this is dense! %s'%name)
+                self.num_dense_layers += 1
+            elif "query" in name or "key" in name:
+                logger.info('this is query and key! %s'%name)
+                self.num_attention_layers += 1
+            elif "dropout" in name:
+
+                #exception case for embedding dropout
+                if 'bert.embeddings.dropout' in name:
+                    continue
+
+                logger.info('this is dropout! %s'%name)
+                self.dropout_rates[self.num_dropout_layers] = m.p
+                self.num_dropout_layers += 1
+
+        logger.info(self.num_dense_layers)
+        logger.info(self.num_attention_layers)
+        logger.info(self.num_dropout_layers)
 
 
     def _prune(self):
         index = 0
+        dropout_index = 0
         num_pruned, num_weights = 0, 0
-        for m in self.model.modules():
-            if isinstance(m, nn.Linear):
+        for name, m in self.model.named_modules():
+
+            #exception for last layer
+            if "bert.pooler.dense" in name:
+                continue
+
+            logger.info("# Train Mode.")
+            logger.info('name %s, index %d'%(name, index))
+            if "dense" in name or "value" in name:
+
                 num = torch.numel(m.weight.data)
 
-                if index == self.num_layers - 1:
+                if index == self.num_dense_layers - 1:
                     alpha = 0.25
                 else:
                     alpha = 1
 
-            weight_mask = torch.ge(m.weight.data.abs(), alpha * m.weight.data.std()).type('torch.FloatTensor')
-            if self.cuda:
-                weight_mask = weight_mask.cuda()
-            self.weight_masks[index] = weight_mask
+                weight_mask = torch.ge(m.weight.data.abs(), alpha * m.weight.data.std()).type('torch.FloatTensor')
+                if self.env == "gpu":
+                    weight_mask = weight_mask.cuda()
+                self.dense_weight_masks[index] = weight_mask
+                print(index, weight_mask.size())
 
-            bias_mask = torch.ones(m.bias.data.size())
-            if self.cuda:
-                bias_mask = bias_mask.cuda()
+                bias_mask = torch.ones(m.bias.data.size())
+                if self.env == "gpu":
+                    bias_mask = bias_mask.cuda()
 
-            for i in range(bias_mask.size(0)):
-                if len(torch.nonzero(weight_mask[i]).size()) == 0:
-                    bias_mask[i] = 0
-            self.bias_masks[index] = bias_mask
+                for i in range(bias_mask.size(0)):
+                    if len(torch.nonzero(weight_mask[i]).size()) == 0:
+                        bias_mask[i] = 0
+                self.dense_bias_masks[index] = bias_mask
 
-            index +=1
-
-            layer_pruned = num - torch.nonzero(weight_mask).size(0)
-            print('number pruned in weight of layer %d: %.3f %%' % (index, 100 * (layer_pruned / num)))
-            bias_num = torch.numel(bias_mask)
-            bias_pruned = bias_num - torch.nonzero(bias_mask).size(0)
-            print('number pruned in bias of layer %d: %.3f %%' % (index, 100 * (bias_pruned / bias_num)))
-            num_pruned += layer_pruned
-            num_weights += num
+                layer_pruned = num - torch.nonzero(weight_mask).size(0)
+                logger.info('number pruned in weight of layer %d: %.3f %%' % (index, 100 * (layer_pruned / num)))
+                bias_num = torch.numel(bias_mask)
+                bias_pruned = bias_num - torch.nonzero(bias_mask).size(0)
+                logger.info('number pruned in bias of layer %d: %.3f %%' % (index, 100 * (bias_pruned / bias_num)))
+                index +=1
+                num_pruned += layer_pruned
+                num_weights += num
             
-            m.weight.data *= weight_mask
-            m.bias.data *= bias_mask
+                m.weight.data *= weight_mask
+                m.bias.data *= bias_mask
+
+            elif "dropout" in name:
+                #exceptional case of model.bert.embeddings.dropout
+                print("origin: ", m.p)
+                if index == 0:
+                    m.p = 0.0
+                    continue
+                mask = self.dense_weight_masks[index - 1]
+                m.p = self.dropout_rates[dropout_index] * math.sqrt(torch.nonzero(mask).size(0) / torch.numel(mask))
+                print("new dropout rate: ", m.p)
+                dropout_index += 1
 
         return num_pruned / num_weights
+
+    def _set_grad(self):
+        index = 0
+        for name, m in self.model.named_modules():
+
+            #exception for last layer
+            if "bert.pooler.dense" in name:
+                continue
+
+            if "dense" in name or "value" in name:
+                #logger.info('idx %d backward name %s'%(index, name))
+                m.weight.grad.data *= self.dense_weight_masks[index]
+                m.bias.grad.data *= self.dense_bias_masks[index]
+                index +=1
+
+
 
     def set_model_base_properties(self, config, log_dir):
         model = self.model
@@ -179,6 +243,8 @@ class Trainer:
     def train_and_evaluate(self, train_loader, valid_loader, optimizer):
         """ Train and Evaluate """
         start_time = time.time()
+
+        self._prune()
 
         for epoch in range(1, self.num_epochs + 1):
             self.train_counter.epoch = epoch
@@ -214,7 +280,6 @@ class Trainer:
 
         for epoch in range(1, self.num_epochs + 1):
 
-            self._prune()
             self.train_counter.epoch = epoch
 
             metrics = self._run_epoch(
@@ -431,6 +496,7 @@ class Trainer:
         eval_example_count = 0
 
         for step, batch in enumerate(tqdm(data_loader, disable=disable_prograss_bar)):
+
             inputs = batch.to_dict()  # for DataParallel
             output_dict = self.model(**inputs)
 
@@ -463,6 +529,8 @@ class Trainer:
                     step_start_time = time.time()
 
                 loss.backward()
+
+                self._set_grad()
 
                 if self.grad_max_norm:
                     clip_grad_norm_(self._get_model_parameters(), self.grad_max_norm)

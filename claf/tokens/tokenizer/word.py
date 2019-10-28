@@ -148,6 +148,7 @@ class WordTokenizer(Tokenizer):
         if self.word_tokenizer is None:
             from konlpy.tag import Mecab
 
-            self.word_tokenizer = Mecab('/st2/samsungds/local/usr/local/lib/mecab/dic/mecab-ko-dic')
+            #self.word_tokenizer = Mecab('/st2/samsungds/local/usr/local/lib/mecab/dic/mecab-ko-dic')
+            self.word_tokenizer = Mecab()
 
         return self.word_tokenizer.morphs(text)
