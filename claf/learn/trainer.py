@@ -119,12 +119,16 @@ class Trainer:
         self._count_layers()
         self.dense_weight_masks = [None for _ in range(self.num_dense_layers)]
         self.dense_bias_masks = [None for _ in range(self.num_dense_layers)]
-        self.attention_weight_masks = [None for _ in range(self.num_attention_layers)]
-        self.attention_bias_masks = [None for _ in range(self.num_attention_layers)]
+        #self.attention_weight_masks = [None for _ in range(self.num_attention_layers)]
+        #self.attention_bias_masks = [None for _ in range(self.num_attention_layers)]
 
         self.env = "gpu" if torch.cuda.is_available() else "cpu"
 
     def _count_layers(self):
+
+        total_param = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(total_param)
+
         for name, m in self.model.named_modules():
             logger.info(name)
 
@@ -132,12 +136,12 @@ class Trainer:
             if "bert.pooler.dense" in name:
                 continue
 
-            if "dense" in name or "value" in name:
+            if "dense" in name or "value" in name or "query" in name or "key" in name:
                 logger.info('this is dense! %s'%name)
                 self.num_dense_layers += 1
-            elif "query" in name or "key" in name:
-                logger.info('this is query and key! %s'%name)
-                self.num_attention_layers += 1
+            #elif "query" in name or "key" in name:
+            #    logger.info('this is query and key! %s'%name)
+            #    self.num_attention_layers += 1
             elif "dropout" in name:
 
                 #exception case for embedding dropout
@@ -149,7 +153,7 @@ class Trainer:
                 self.num_dropout_layers += 1
 
         logger.info(self.num_dense_layers)
-        logger.info(self.num_attention_layers)
+        #logger.info(self.num_attention_layers)
         logger.info(self.num_dropout_layers)
 
 
@@ -165,14 +169,14 @@ class Trainer:
 
             logger.info("# Train Mode.")
             logger.info('name %s, index %d'%(name, index))
-            if "dense" in name or "value" in name:
+            if "dense" in name or "value" in name or "query" in name or "key" in name:
 
                 num = torch.numel(m.weight.data)
 
                 if index == self.num_dense_layers - 1:
                     alpha = 0.25
                 else:
-                    alpha = 1
+                    alpha = 1.5
 
                 weight_mask = torch.ge(m.weight.data.abs(), alpha * m.weight.data.std()).type('torch.FloatTensor')
                 if self.env == "gpu":
@@ -212,6 +216,11 @@ class Trainer:
                 print("new dropout rate: ", m.p)
                 dropout_index += 1
 
+        print('#####' * 10)
+        print(num_pruned)
+        print(num_weights)
+        print('#####' * 10)
+
         return num_pruned / num_weights
 
     def _set_grad(self):
@@ -222,7 +231,7 @@ class Trainer:
             if "bert.pooler.dense" in name:
                 continue
 
-            if "dense" in name or "value" in name:
+            if "dense" in name or "value" in name or "query" in name or "key" in name:
                 #logger.info('idx %d backward name %s'%(index, name))
                 m.weight.grad.data *= self.dense_weight_masks[index]
                 m.bias.grad.data *= self.dense_bias_masks[index]

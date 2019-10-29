@@ -81,8 +81,8 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
 def evaluate(dataset, predictions):
     f1 = exact_match = total = 0
 ###################
-    import pickle
-    f1_score_dict = {}
+#    import pickle
+#    f1_score_dict = {}
 ##################
     for article in dataset:
         for paragraph in article['paragraphs']:
@@ -101,13 +101,13 @@ def evaluate(dataset, predictions):
                     f1_score, prediction, ground_truths)
 
 ###############################
-                f1_score_dict[qa['id']] = 100.0 * metric_max_over_ground_truths(
-                                        f1_score, prediction, ground_truths)
+#                f1_score_dict[qa['id']] = 100.0 * metric_max_over_ground_truths(
+#                                        f1_score, prediction, ground_truths)
 ################################
 
 ##############################3
-    with open('/st2/samsungds/claf/f1_scores_vae_f1_best_x3.pkl','wb') as f:
-        pickle.dump(f1_score_dict, f) 
+#    with open('/st2/samsungds/claf/f1_scores_vae_f1_best_x3.pkl','wb') as f:
+#        pickle.dump(f1_score_dict, f) 
 #########################
 
     exact_match = 100.0 * exact_match / total
